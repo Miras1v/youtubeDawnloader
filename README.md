@@ -5,7 +5,7 @@ YouTube'dan video ve ses dosyalarını indirmek için modern web ve Android uygu
 ## 📁 Proje Yapısı
 
 ```
-youtubeForAndroid/
+youtubeDawnloader/
 ├── web/                           # Web uygulaması (Flask)
 │   ├── app.py                    # Flask backend API
 │   ├── requirements.txt          # Python bağımlılıkları

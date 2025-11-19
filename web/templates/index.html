@@ -414,6 +414,86 @@
             display: block;
         }
 
+        .download-item {
+            background: var(--video-info-bg);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+        }
+
+        .download-item.active {
+            border-color: #667eea;
+        }
+
+        [data-theme="dark"] .download-item.active {
+            border-color: #8b7cf6;
+        }
+
+        .download-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .download-item-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 14px;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .download-item-status {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: 10px;
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        [data-theme="dark"] .progress-bar {
+            background: linear-gradient(90deg, #8b7cf6 0%, #9d7cf6 100%);
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .download-item-actions {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 6px;
+        }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 1.8em;
@@ -535,6 +615,9 @@
                 <div class="error" id="link-error"></div>
                 <div class="success" id="link-success"></div>
 
+                <!-- İndirme Kuyruğu -->
+                <div id="download-queue" style="margin-top: 20px;"></div>
+
                 <div class="video-info" id="video-info">
                     <img id="video-thumbnail" src="" alt="Thumbnail" />
                     <h3 id="video-title"></h3>
@@ -566,6 +649,7 @@
 
     <script>
         let currentVideoUrl = '';
+        let activeDownloads = new Map(); // download_id -> {title, format, etc}
 
         // Tema yönetimi
         function initTheme() {
@@ -729,7 +813,6 @@
                 quality = document.getElementById('video-quality').value;
             }
 
-            showLoading('link-loading', true);
             hideError('link-error');
             hideSuccess('link-success');
 
@@ -756,22 +839,127 @@
                     } else {
                         formatText = `Video (${fileFormat.toUpperCase()}, ${quality === 'best' ? 'En İyi' : quality})`;
                     }
-                    showSuccess('link-success', `${formatText} indiriliyor: ${data.title}`);
-                    // Dosyayı tarayıcının varsayılan indirme davranışıyla indir
-                    const link = document.createElement('a');
-                    link.href = data.download_url;
-                    link.download = data.filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                    
+                    // İndirmeyi kuyruğa ekle
+                    const videoTitle = document.getElementById('video-title').textContent || 'Bilinmeyen';
+                    addDownloadToQueue(data.download_id, videoTitle, formatText, format);
+                    
+                    // Progress takibini başlat
+                    trackDownloadProgress(data.download_id);
                 } else {
                     showError('link-error', data.error || 'İndirme başarısız');
                 }
             } catch (error) {
                 showError('link-error', 'Bir hata oluştu: ' + error.message);
-            } finally {
-                showLoading('link-loading', false);
             }
+        }
+
+        function addDownloadToQueue(downloadId, title, formatText, format) {
+            activeDownloads.set(downloadId, {
+                title: title,
+                format: formatText,
+                type: format
+            });
+
+            const queueContainer = document.getElementById('download-queue');
+            const downloadItem = document.createElement('div');
+            downloadItem.className = 'download-item';
+            downloadItem.id = `download-${downloadId}`;
+            downloadItem.innerHTML = `
+                <div class="download-item-header">
+                    <div class="download-item-title" title="${title}">${title}</div>
+                    <div class="download-item-status" id="status-${downloadId}">Kuyruğa eklendi</div>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-${downloadId}" style="width: 0%"></div>
+                </div>
+                <div class="progress-info">
+                    <span id="percent-${downloadId}">0%</span>
+                    <span id="speed-${downloadId}"></span>
+                </div>
+            `;
+            queueContainer.appendChild(downloadItem);
+        }
+
+        async function trackDownloadProgress(downloadId) {
+            const checkStatus = async () => {
+                try {
+                    const response = await fetch(`/api/download/status/${downloadId}`);
+                    const status = await response.json();
+
+                    const progressBar = document.getElementById(`progress-${downloadId}`);
+                    const percentText = document.getElementById(`percent-${downloadId}`);
+                    const statusText = document.getElementById(`status-${downloadId}`);
+                    const speedText = document.getElementById(`speed-${downloadId}`);
+                    const downloadItem = document.getElementById(`download-${downloadId}`);
+
+                    if (!downloadItem) return;
+
+                    if (status.status === 'not_found') {
+                        statusText.textContent = 'İndirme bulunamadı';
+                        downloadItem.style.borderColor = 'var(--error-text)';
+                        return; // Stop checking
+                    } else if (status.status === 'queued') {
+                        statusText.textContent = 'Kuyruğa eklendi';
+                        progressBar.style.width = '0%';
+                        percentText.textContent = '0%';
+                        setTimeout(checkStatus, 1000);
+                    } else if (status.status === 'downloading') {
+                        downloadItem.classList.add('active');
+                        statusText.textContent = 'İndiriliyor...';
+                        progressBar.style.width = `${status.percent}%`;
+                        percentText.textContent = `${status.percent.toFixed(1)}%`;
+                        
+                        if (status.speed) {
+                            const speedMB = (status.speed / (1024 * 1024)).toFixed(2);
+                            speedText.textContent = `${speedMB} MB/s`;
+                        }
+                        
+                        if (status.eta) {
+                            const minutes = Math.floor(status.eta / 60);
+                            const seconds = status.eta % 60;
+                            statusText.textContent = `İndiriliyor... (${minutes}:${seconds.toString().padStart(2, '0')} kaldı)`;
+                        }
+                        
+                        setTimeout(checkStatus, 500);
+                    } else if (status.status === 'processing') {
+                        statusText.textContent = 'İşleniyor...';
+                        progressBar.style.width = '95%';
+                        percentText.textContent = '95%';
+                        setTimeout(checkStatus, 500);
+                    } else if (status.status === 'completed') {
+                        statusText.textContent = 'Tamamlandı!';
+                        progressBar.style.width = '100%';
+                        percentText.textContent = '100%';
+                        speedText.textContent = '';
+                        
+                        // Dosyayı indir
+                        const link = document.createElement('a');
+                        link.href = `/api/download/file/${downloadId}`;
+                        link.download = status.filename;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        
+                        // 2 saniye sonra kuyruktan kaldır
+                        setTimeout(() => {
+                            if (downloadItem) {
+                                downloadItem.remove();
+                                activeDownloads.delete(downloadId);
+                            }
+                        }, 2000);
+                    } else if (status.status === 'error') {
+                        statusText.textContent = 'Hata: ' + (status.error || 'Bilinmeyen hata');
+                        downloadItem.style.borderColor = 'var(--error-text)';
+                        progressBar.style.background = 'var(--error-text)';
+                    }
+                } catch (error) {
+                    console.error('Progress check error:', error);
+                    setTimeout(checkStatus, 1000);
+                }
+            };
+
+            checkStatus();
         }
 
         async function searchVideos() {
